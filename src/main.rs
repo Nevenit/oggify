@@ -20,8 +20,9 @@ use librespot_audio::{AudioDecrypt, AudioFile};
 use librespot_core::authentication::Credentials;
 use librespot_core::config::SessionConfig;
 use librespot_core::session::Session;
-use librespot_core::spotify_id::SpotifyId;
+use librespot_core::spotify_id::{SpotifyId, SpotifyIdError};
 use librespot_metadata::{Artist, FileFormat, Metadata, Track, Album};
+use log::Level::Error;
 use regex::Regex;
 use scoped_threadpool::Pool;
 use tokio_core::reactor::Core;
@@ -47,6 +48,17 @@ fn main() {
     let spotify_uri = Regex::new(r"spotify:track:([[:alnum:]]+)").unwrap();
     let spotify_url = Regex::new(r"open\.spotify\.com/track/([[:alnum:]]+)").unwrap();
 
+    for link in io::stdin().lock().lines() {
+        let linkCopy = link.unwrap().clone();
+        let songLink = linkCopy.as_str();
+        let songId = extractSongId(songLink).expect("Failed to extract song id");
+        println!("{}", songId.to_base62());
+
+        let track = getTrack(songId, &mut core, &session);
+        println!("{}", track.name);
+    }
+
+    /*
     io::stdin().lock().lines()
         .filter_map(|line|
             line.ok().and_then(|str|
@@ -106,4 +118,40 @@ fn main() {
                 assert!(child.wait().expect("Out of ideas for error messages").success(), "Helper script returned an error");
             }
         });
+
+     */
+}
+
+pub fn extractSongId(link: &str) -> std::result::Result<SpotifyId, SpotifyIdError> {
+    let spotify_uri: Regex = Regex::new(r"spotify:track:([[:alnum:]]+)").unwrap();
+    let spotify_url: Regex = Regex::new(r"open\.spotify\.com/track/([[:alnum:]]+)").unwrap();
+
+    let uriCapture = spotify_uri.captures(link);
+    let urlCapture = spotify_url.captures(link);
+
+    if uriCapture.is_some() {
+        return SpotifyId::from_base62(&uriCapture.unwrap()[1]);
+    } else if urlCapture.is_some() {
+        return SpotifyId::from_base62(&urlCapture.unwrap()[1]);
+    }
+    Err(SpotifyIdError)
+}
+
+pub fn getTrack(songId: SpotifyId, core: &mut Core, session: &Session) -> Track {
+    info!("Getting track {}...", songId.to_base62());
+    let mut track = core.run(Track::get(session, songId)).expect("Cannot get track metadata");
+    if !track.available {
+        let mut pot_track = None;
+        warn!("Track {} is not available, finding alternative...", songId.to_base62());
+        for alt_track in track.alternatives.iter() {
+            let potential_track = core.run(Track::get(session, *alt_track)).expect("Cannot get track metadata");
+            if potential_track.available {
+                pot_track = Some(potential_track);
+                warn!("Found track alternative {} -> {}", songId.to_base62(), track.id.to_base62());
+                break;
+            }
+        }
+        track = pot_track.expect(&format!("Could not find alternative for track {}", songId.to_base62()));
+    }
+    track
 }
