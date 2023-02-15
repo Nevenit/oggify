@@ -52,10 +52,22 @@ fn main() {
         let linkCopy = link.unwrap().clone();
         let songLink = linkCopy.as_str();
         let songId = extractSongId(songLink).expect("Failed to extract song id");
-        println!("{}", songId.to_base62());
+        println!("SongId: {}", songId.to_base62());
 
         let track = getTrack(songId, &mut core, &session);
-        println!("{}", track.name);
+        println!("Track: {}", track.name);
+
+        let mut artists_strs = getArtists(track);
+
+        println!("Artist: {}", artists_strs[0]);
+
+        debug!("File formats: {}", track.files.keys().map(|filetype|format!("{:?}", filetype)).collect::<Vec<_>>().join(" "));
+
+        let file_id = track.files.get(&FileFormat::OGG_VORBIS_320)
+            .or(track.files.get(&FileFormat::OGG_VORBIS_160))
+            .or(track.files.get(&FileFormat::OGG_VORBIS_96))
+            .expect("Could not find a OGG_VORBIS format for the track.");
+
     }
 
     /*
@@ -154,4 +166,13 @@ pub fn getTrack(songId: SpotifyId, core: &mut Core, session: &Session) -> Track 
         track = pot_track.expect(&format!("Could not find alternative for track {}", songId.to_base62()));
     }
     track
+}
+
+pub fn getArtists(track: Track) -> Vec<String> {
+    let mut artist_vec: Vec<String> = vec![];
+    for artist in track.artists {
+        let artist_id = core.run(Artist::get(&session, artist)).expect("Cannot get artist metadata").name;
+        artist_vec.push(artist_id);
+    }
+    artist_vec
 }
