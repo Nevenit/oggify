@@ -57,18 +57,55 @@ fn main() {
         let track = getTrack(songId, &mut core, &session);
         println!("Track: {}", track.name);
 
-        let mut artists_strs = getArtists(track);
+        let mut artists_strs = getArtists(&track, &mut core, &session);
 
         println!("Artist: {}", artists_strs[0]);
 
-        debug!("File formats: {}", track.files.keys().map(|filetype|format!("{:?}", filetype)).collect::<Vec<_>>().join(" "));
+        //debug!("File formats: {}", track.files.keys().map(|filetype|format!("{:?}", filetype)).collect::<Vec<_>>().join(" "));
 
         let file_id = track.files.get(&FileFormat::OGG_VORBIS_320)
             .or(track.files.get(&FileFormat::OGG_VORBIS_160))
             .or(track.files.get(&FileFormat::OGG_VORBIS_96))
             .expect("Could not find a OGG_VORBIS format for the track.");
 
+
+
+
+
+        let key = core.run(session.audio_key().request(track.id, *file_id)).expect("Cannot get audio key");
+        let mut encrypted_file = core.run(AudioFile::open(&session, *file_id, 320, true)).unwrap();
+        let mut buffer = Vec::new();
+        let mut read_all: Result<usize> = Ok(0);
+        let fetched = AtomicBool::new(false);
+        threadpool.scoped(|scope|{
+            scope.execute(||{
+                read_all = encrypted_file.read_to_end(&mut buffer);
+                fetched.store(true, Ordering::Release);
+            });
+            while !fetched.load(Ordering::Acquire) {
+                core.turn(Some(Duration::from_millis(100)));
+            }
+        });
+        read_all.expect("Cannot read file stream");
+        let mut decrypted_buffer = Vec::new();
+        AudioDecrypt::new(key, &buffer[..]).read_to_end(&mut decrypted_buffer).expect("Cannot decrypt stream");
+        if args.len() == 3 {
+            let fname = format!("{} - {}.ogg", artists_strs.join(", "), track.name);
+            std::fs::write(&fname, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
+            info!("Filename: {}", fname);
+        } else {
+            let album = core.run(Album::get(&session, track.album)).expect("Cannot get album metadata");
+            let mut cmd = Command::new(args[3].to_owned());
+            cmd.stdin(Stdio::piped());
+            cmd.arg(songId.to_base62()).arg(track.name).arg(album.name).args(artists_strs.iter());
+            let mut child = cmd.spawn().expect("Could not run helper program");
+            let pipe = child.stdin.as_mut().expect("Could not open helper stdin");
+            pipe.write_all(&decrypted_buffer[0xa7..]).expect("Failed to write to stdin");
+            assert!(child.wait().expect("Out of ideas for error messages").success(), "Helper script returned an error");
+        }
     }
+
+
 
     /*
     io::stdin().lock().lines()
@@ -168,10 +205,11 @@ pub fn getTrack(songId: SpotifyId, core: &mut Core, session: &Session) -> Track 
     track
 }
 
-pub fn getArtists(track: Track) -> Vec<String> {
+pub fn getArtists(track: &Track, core: &mut Core, session: &Session) -> Vec<String> {
     let mut artist_vec: Vec<String> = vec![];
-    for artist in track.artists {
-        let artist_id = core.run(Artist::get(&session, artist)).expect("Cannot get artist metadata").name;
+    let local_track = track.clone();
+    for artist in local_track.artists {
+        let artist_id = core.run(Artist::get(session, artist)).expect("Cannot get artist metadata").name;
         artist_vec.push(artist_id);
     }
     artist_vec
