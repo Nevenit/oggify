@@ -214,3 +214,10 @@ pub fn getArtists(track: &Track, core: &mut Core, session: &Session) -> Vec<Stri
     }
     artist_vec
 }
+
+/*
+ThingsNotToDo:
+-Add playlist support
+-Dont download existing files
+-Add metadata to song files
+ */
