@@ -11,6 +11,7 @@ extern crate tokio_core;
 use std::env;
 use std::io::{self, BufRead, Read, Result};
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -51,7 +52,7 @@ fn main() {
     let mut threadpool = Pool::new(1);
 
     // Create vector storing all tracks
-    let mut track_list: Vec<(Track, Vec<String>)> = vec![];
+    let mut track_list: Vec<(Track, SpotifyId, Vec<String>)> = vec![];
 
     // Add all unique tracks to the list
     for link in io::stdin().lock().lines() {
@@ -66,33 +67,24 @@ fn main() {
         let mut artists_strs = getArtists(&track, &mut core, &session);
 
         println!("Artist: {}", artists_strs[0]);
+
         // Store the artist in the track list and dont and to track list if file is already downloaded
-        track_list.push((track, artists_strs));
+        let fname = format!("{} - {}.ogg", artists_strs.join(", "), track.name);
+
+        if Path::new(&fname).exists() {
+            info!("{} - is already downloaded", fname);
+            continue;
+        }
+        track_list.push((track, songId, artists_strs));
     }
 
-    for link in io::stdin().lock().lines() {
-        let linkCopy = link.unwrap().clone();
-        let songLink = linkCopy.as_str();
-        let songId = extractSongId(songLink).expect("Failed to extract song id");
-        println!("SongId: {}", songId.to_base62());
-
-        let track = getTrack(songId, &mut core, &session);
-        println!("Track: {}", track.name);
-
-        let mut artists_strs = getArtists(&track, &mut core, &session);
-
-        println!("Artist: {}", artists_strs[0]);
-
-        //debug!("File formats: {}", track.files.keys().map(|filetype|format!("{:?}", filetype)).collect::<Vec<_>>().join(" "));
-
-        let file_id = track.files.get(&FileFormat::OGG_VORBIS_320)
-            .or(track.files.get(&FileFormat::OGG_VORBIS_160))
-            .or(track.files.get(&FileFormat::OGG_VORBIS_96))
+    for item in track_list {
+        let file_id = item.0.files.get(&FileFormat::OGG_VORBIS_320)
+            .or(item.0.files.get(&FileFormat::OGG_VORBIS_160))
+            .or(item.0.files.get(&FileFormat::OGG_VORBIS_96))
             .expect("Could not find a OGG_VORBIS format for the track.");
 
-
-
-        let key = core.run(session.audio_key().request(track.id, *file_id)).expect("Cannot get audio key");
+        let key = core.run(session.audio_key().request(item.0.id, *file_id)).expect("Cannot get audio key");
         let mut encrypted_file = core.run(AudioFile::open(&session, *file_id, 320, true)).unwrap();
         let mut buffer = Vec::new();
         let mut read_all: Result<usize> = Ok(0);
@@ -110,14 +102,14 @@ fn main() {
         let mut decrypted_buffer = Vec::new();
         AudioDecrypt::new(key, &buffer[..]).read_to_end(&mut decrypted_buffer).expect("Cannot decrypt stream");
         if args.len() == 3 {
-            let fname = format!("{} - {}.ogg", artists_strs.join(", "), track.name);
+            let fname = format!("{} - {}.ogg", item.2.join(", "), item.0.name);
             std::fs::write(&fname, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
             info!("Filename: {}", fname);
         } else {
-            let album = core.run(Album::get(&session, track.album)).expect("Cannot get album metadata");
+            let album = core.run(Album::get(&session, item.0.album)).expect("Cannot get album metadata");
             let mut cmd = Command::new(args[3].to_owned());
             cmd.stdin(Stdio::piped());
-            cmd.arg(songId.to_base62()).arg(track.name).arg(album.name).args(artists_strs.iter());
+            cmd.arg(item.1.to_base62()).arg(item.0.name).arg(album.name).args(item.2.iter());
             let mut child = cmd.spawn().expect("Could not run helper program");
             let pipe = child.stdin.as_mut().expect("Could not open helper stdin");
             pipe.write_all(&decrypted_buffer[0xa7..]).expect("Failed to write to stdin");
