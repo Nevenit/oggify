@@ -33,7 +33,7 @@ fn main() {
 
     //Verify the number of arguments
     let args: Vec<_> = env::args().collect();
-    assert!(args.len() == 3 || args.len() == 4, "Usage: {} user password [helper_script] < tracks_file", args[0]);
+    assert!(args.len() == 4, format!("Usage: {} user password tracks_file", args[0]));
 
     //Create the sesion
     let mut core = Core::new().unwrap();
@@ -59,17 +59,17 @@ fn main() {
         let linkCopy = link.unwrap().clone();
         let songLink = linkCopy.as_str();
         let songId = extractSongId(songLink).expect("Failed to extract song id");
-        println!("SongId: {}", songId.to_base62());
+        //println!("SongId: {}", songId.to_base62());
 
         let track = getTrack(songId, &mut core, &session);
-        println!("Track: {}", track.name);
+        //println!("Track: {}", track.name);
 
         let mut artists_strs = getArtists(&track, &mut core, &session);
 
-        println!("Artist: {}", artists_strs[0]);
+        //println!("Artist: {}", artists_strs[0]);
 
         // Store the artist in the track list and dont and to track list if file is already downloaded
-        let fname = format!("{} - {}.ogg", artists_strs.join(", "), track.name);
+        let fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", artists_strs.join(", "), track.name, songId.to_base62()));
 
         if Path::new(&fname).exists() {
             info!("{} - is already downloaded", fname);
@@ -101,20 +101,10 @@ fn main() {
         read_all.expect("Cannot read file stream");
         let mut decrypted_buffer = Vec::new();
         AudioDecrypt::new(key, &buffer[..]).read_to_end(&mut decrypted_buffer).expect("Cannot decrypt stream");
-        if args.len() == 3 {
-            let fname = format!("{} - {}.ogg", item.2.join(", "), item.0.name);
-            std::fs::write(&fname, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
-            info!("Filename: {}", fname);
-        } else {
-            let album = core.run(Album::get(&session, item.0.album)).expect("Cannot get album metadata");
-            let mut cmd = Command::new(args[3].to_owned());
-            cmd.stdin(Stdio::piped());
-            cmd.arg(item.1.to_base62()).arg(item.0.name).arg(album.name).args(item.2.iter());
-            let mut child = cmd.spawn().expect("Could not run helper program");
-            let pipe = child.stdin.as_mut().expect("Could not open helper stdin");
-            pipe.write_all(&decrypted_buffer[0xa7..]).expect("Failed to write to stdin");
-            assert!(child.wait().expect("Out of ideas for error messages").success(), "Helper script returned an error");
-        }
+
+        let fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", item.2.join(", "), item.0.name, item.1.to_base62()));
+        info!("Filename: {}", fname);
+        std::fs::write(&fname, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
     }
 }
 
@@ -160,6 +150,19 @@ pub fn getArtists(track: &Track, core: &mut Core, session: &Session) -> Vec<Stri
         artist_vec.push(artist_id);
     }
     artist_vec
+}
+
+fn windows_compatible_file_name(input: String) -> String {
+    let mut output: String = String::new();
+    output = input.replace("<", "");
+    output = output.replace(">", "");
+    output = output.replace(":", "");
+    output = output.replace("\"", "");
+    output = output.replace("/", "");
+    output = output.replace("\\", "");
+    output = output.replace("|", "");
+    output = output.replace("?", "");
+    output.replace("*", "")
 }
 
 /*
