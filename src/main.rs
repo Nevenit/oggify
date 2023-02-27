@@ -9,7 +9,8 @@ extern crate scoped_threadpool;
 extern crate tokio_core;
 
 use std::env;
-use std::io::{self, BufRead, Read, Result};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Read, Result};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -54,8 +55,10 @@ fn main() {
     // Create vector storing all tracks
     let mut track_list: Vec<(Track, SpotifyId, Vec<String>)> = vec![];
 
+    let links = read_lines(args[3].to_owned());
+
     // Add all unique tracks to the list
-    for link in io::stdin().lock().lines() {
+    for link in links {
         let linkCopy = link.unwrap().clone();
         let songLink = linkCopy.as_str();
         let songId = extractSongId(songLink).expect("Failed to extract song id");
@@ -163,6 +166,13 @@ fn windows_compatible_file_name(input: String) -> String {
     output = output.replace("|", "");
     output = output.replace("?", "");
     output.replace("*", "")
+}
+
+fn read_lines(filename: String) -> io::Lines<BufReader<File>> {
+    // Open the file in read-only mode.
+    let file = File::open(filename).unwrap();
+    // Read the file line by line, and return an iterator of the lines of the file.
+    return io::BufReader::new(file).lines();
 }
 
 /*
