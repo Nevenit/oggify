@@ -28,6 +28,7 @@ use log::Level::Error;
 use regex::Regex;
 use scoped_threadpool::Pool;
 use tokio_core::reactor::Core;
+use slugify::slugify;
 
 fn main() {
     Builder::from_env(Env::default().default_filter_or("info")).init();
@@ -62,7 +63,7 @@ fn main() {
         let linkCopy = link.unwrap().clone();
         let songLink = linkCopy.as_str();
         let songId = extractSongId(songLink).expect("Failed to extract song id");
-        //println!("SongId: {}", songId.to_base62());
+        println!("SongId: {}", songId.to_base62());
 
         let track = getTrack(songId, &mut core, &session);
         //println!("Track: {}", track.name);
@@ -78,6 +79,7 @@ fn main() {
             info!("{} - is already downloaded", fname);
             continue;
         }
+        info!("{} - Added to download list!", fname);
         track_list.push((track, songId, artists_strs));
     }
 
@@ -105,7 +107,10 @@ fn main() {
         let mut decrypted_buffer = Vec::new();
         AudioDecrypt::new(key, &buffer[..]).read_to_end(&mut decrypted_buffer).expect("Cannot decrypt stream");
 
-        let fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", item.2.join(", "), item.0.name, item.1.to_base62()));
+        let mut fname = String::new();
+        let dir = String::from("output/");
+        fname.push_str(&dir);
+        fname.push_str(&windows_compatible_file_name(format!("{} - {} [{}].ogg", item.2.join(", "), item.0.name, item.1.to_base62())));
         info!("Filename: {}", fname);
         std::fs::write(&fname, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
     }
@@ -156,6 +161,7 @@ pub fn getArtists(track: &Track, core: &mut Core, session: &Session) -> Vec<Stri
 }
 
 fn windows_compatible_file_name(input: String) -> String {
+    return slugify!(&input);
     let mut output: String = String::new();
     output = input.replace("<", "");
     output = output.replace(">", "");
