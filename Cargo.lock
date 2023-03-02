@@ -781,6 +781,7 @@ dependencies = [
  "librespot-metadata",
  "log 0.4.11",
  "regex",
+ "sanitize-filename",
  "scoped_threadpool",
  "slugify",
  "tokio-core",
@@ -1148,6 +1149,16 @@ name = "safemem"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef703b7cb59335eae2eb93ceb664c0eb7ea6bf567079d843e09420219668e072"
+
+[[package]]
+name = "sanitize-filename"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c502bdb638f1396509467cb0580ef3b29aa2a45c5d43e5d84928241280296c"
+dependencies = [
+ "lazy_static",
+ "regex",
+]
 
 [[package]]
 name = "scoped-tls"

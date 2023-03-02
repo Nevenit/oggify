@@ -7,6 +7,7 @@ extern crate log;
 extern crate regex;
 extern crate scoped_threadpool;
 extern crate tokio_core;
+extern crate sanitize_filename;
 
 use std::env;
 use std::fs::File;
@@ -161,7 +162,8 @@ pub fn getArtists(track: &Track, core: &mut Core, session: &Session) -> Vec<Stri
 }
 
 fn windows_compatible_file_name(input: String) -> String {
-    return slugify!(&input);
+    return sanitize_filename::sanitize(input);
+    return slugify!(&input, separator = " ");
     let mut output: String = String::new();
     output = input.replace("<", "");
     output = output.replace(">", "");
@@ -184,6 +186,7 @@ fn read_lines(filename: String) -> io::Lines<BufReader<File>> {
 /*
 ThingsNotToDo:
 -Add playlist support
--Dont download existing files
+-Dont download existing files - DONE
 -Add metadata to song files
+-Find a way to support duplicate file names without having the song id in the file name...
  */
