@@ -11,6 +11,7 @@ extern crate sanitize_filename;
 
 use std::env;
 use std::fs::File;
+use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Result};
 use std::io::Write;
 use std::path::Path;
@@ -30,6 +31,7 @@ use regex::Regex;
 use scoped_threadpool::Pool;
 use tokio_core::reactor::Core;
 use slugify::slugify;
+use id3::{Tag, TagLike, Version};
 
 fn main() {
     Builder::from_env(Env::default().default_filter_or("info")).init();
@@ -57,31 +59,32 @@ fn main() {
     // Create vector storing all tracks
     let mut track_list: Vec<(Track, SpotifyId, Vec<String>)> = vec![];
 
-    let links = read_lines(args[3].to_owned());
+    if let Ok(lines) = read_lines(args[3].to_owned()) {
+        // Add all unique tracks to the list
+        for link in lines {
+            info!("--------------------------------------------------------------");
+            let linkCopy = link.unwrap().clone();
+            let songLink = linkCopy.as_str();
+            let songId = extractSongId(songLink).expect("Failed to extract song id");
+            info!("SongId: {}", songId.to_base62());
 
-    // Add all unique tracks to the list
-    for link in links {
-        let linkCopy = link.unwrap().clone();
-        let songLink = linkCopy.as_str();
-        let songId = extractSongId(songLink).expect("Failed to extract song id");
-        println!("SongId: {}", songId.to_base62());
+            let track = getTrack(songId, &mut core, &session);
+            //println!("Track: {}", track.name);
 
-        let track = getTrack(songId, &mut core, &session);
-        //println!("Track: {}", track.name);
+            let mut artists_strs = getArtists(&track, &mut core, &session);
 
-        let mut artists_strs = getArtists(&track, &mut core, &session);
+            //println!("Artist: {}", artists_strs[0]);
 
-        //println!("Artist: {}", artists_strs[0]);
+            // Store the artist in the track list and dont and to track list if file is already downloaded
+            let fname = windows_compatible_file_name(format!("{} - {} [{}].mp3", artists_strs.join(", "), track.name, songId.to_base62()));
 
-        // Store the artist in the track list and dont and to track list if file is already downloaded
-        let fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", artists_strs.join(", "), track.name, songId.to_base62()));
-
-        if Path::new(&fname).exists() {
-            info!("{} - is already downloaded", fname);
-            continue;
+            if Path::new(&fname).exists() {
+                info!("{} - is already downloaded", fname);
+                continue;
+            }
+            info!("{} - Added to download list!", fname);
+            track_list.push((track, songId, artists_strs));
         }
-        info!("{} - Added to download list!", fname);
-        track_list.push((track, songId, artists_strs));
     }
 
     for item in track_list {
@@ -111,9 +114,11 @@ fn main() {
         let mut fname = String::new();
         let dir = String::from("output/");
         fname.push_str(&dir);
-        fname.push_str(&windows_compatible_file_name(format!("{} - {} [{}].ogg", item.2.join(", "), item.0.name, item.1.to_base62())));
+        fname.push_str(&windows_compatible_file_name(format!("{} - {} [{}].mp3", item.2.join(", "), item.0.name, item.1.to_base62())));
         info!("Filename: {}", fname);
         std::fs::write(&fname, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
+
+        set_metadata(fname, item.0, item.2);
     }
 }
 
@@ -163,24 +168,22 @@ pub fn getArtists(track: &Track, core: &mut Core, session: &Session) -> Vec<Stri
 
 fn windows_compatible_file_name(input: String) -> String {
     return sanitize_filename::sanitize(input);
-    return slugify!(&input, separator = " ");
-    let mut output: String = String::new();
-    output = input.replace("<", "");
-    output = output.replace(">", "");
-    output = output.replace(":", "");
-    output = output.replace("\"", "");
-    output = output.replace("/", "");
-    output = output.replace("\\", "");
-    output = output.replace("|", "");
-    output = output.replace("?", "");
-    output.replace("*", "")
 }
 
-fn read_lines(filename: String) -> io::Lines<BufReader<File>> {
-    // Open the file in read-only mode.
-    let file = File::open(filename).unwrap();
-    // Read the file line by line, and return an iterator of the lines of the file.
-    return io::BufReader::new(file).lines();
+fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
+    where P: AsRef<Path>, {
+    let file = File::open(filename)?;
+    Ok(io::BufReader::new(file).lines())
+}
+
+fn set_metadata(file: String, track: Track, artists: Vec<String>) {
+    if let Ok(mut tag) = Tag::read_from_path(&file) {
+        //tag.set_album(track.album);
+        tag.set_artist(artists.join(", "));
+        tag.set_title(track.name);
+        tag.set_text("Spotify id", track.id.to_base62());
+        tag.write_to_path(&file, Version::Id3v24);
+    }
 }
 
 /*
