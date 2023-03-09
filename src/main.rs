@@ -10,7 +10,8 @@ extern crate tokio_core;
 extern crate sanitize_filename;
 
 use std::env;
-use std::fs::File;
+use std::fmt::format;
+use std::fs::{copy, File};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Result};
 use std::io::Write;
@@ -31,7 +32,7 @@ use regex::Regex;
 use scoped_threadpool::Pool;
 use tokio_core::reactor::Core;
 use slugify::slugify;
-use id3::{Tag, TagLike, Version};
+use id3::{ErrorKind, Frame, Tag, TagLike, Version};
 
 fn main() {
     Builder::from_env(Env::default().default_filter_or("info")).init();
@@ -76,9 +77,11 @@ fn main() {
             //println!("Artist: {}", artists_strs[0]);
 
             // Store the artist in the track list and dont and to track list if file is already downloaded
-            let fname = windows_compatible_file_name(format!("{} - {} [{}].mp3", artists_strs.join(", "), track.name, songId.to_base62()));
+            let fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", artists_strs.join(", "), track.name, songId.to_base62()));
 
-            if Path::new(&fname).exists() {
+            let path = format!("output/{}", fname);
+
+            if Path::new(&path).exists() {
                 info!("{} - is already downloaded", fname);
                 continue;
             }
@@ -111,14 +114,15 @@ fn main() {
         let mut decrypted_buffer = Vec::new();
         AudioDecrypt::new(key, &buffer[..]).read_to_end(&mut decrypted_buffer).expect("Cannot decrypt stream");
 
-        let mut fname = String::new();
-        let dir = String::from("output/");
-        fname.push_str(&dir);
-        fname.push_str(&windows_compatible_file_name(format!("{} - {} [{}].mp3", item.2.join(", "), item.0.name, item.1.to_base62())));
-        info!("Filename: {}", fname);
-        std::fs::write(&fname, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
+        let mut fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", item.2.join(", "), item.0.name, item.1.to_base62()));
+        let dir = format!("output/{}", &fname);
+        let path = Path::new(&dir);
 
-        set_metadata(fname, item.0, item.2);
+        info!("Filename: {}", &fname);
+        std::fs::write(&dir, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
+
+        set_metadata(dir, item.0, item.2).expect("Error writing metadata");
+        //info!("6");
     }
 }
 
@@ -176,14 +180,18 @@ fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
     Ok(io::BufReader::new(file).lines())
 }
 
-fn set_metadata(file: String, track: Track, artists: Vec<String>) {
-    if let Ok(mut tag) = Tag::read_from_path(&file) {
-        //tag.set_album(track.album);
-        tag.set_artist(artists.join(", "));
-        tag.set_title(track.name);
-        tag.set_text("Spotify id", track.id.to_base62());
-        tag.write_to_path(&file, Version::Id3v24);
-    }
+fn set_metadata(file: String, track: Track, artists: Vec<String>) -> id3::Result<()> {
+    info!("Setting metadata for {}", &file);
+    let mut tag = match Tag::read_from_path(&file) {
+        Ok(tag) => tag,
+        Err(id3::Error{kind: ErrorKind::NoTag, ..}) => Tag::new(),
+        Err(err) => return Err(*Box::new(err)),
+    };
+    tag.set_artist("bob");
+    tag.set_title(track.name);
+    //tag.set_text("Spotify id", track.id.to_base62());
+    tag.write_to_path(&file, Version::Id3v24)?;
+    Ok(())
 }
 
 /*
