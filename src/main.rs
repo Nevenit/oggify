@@ -10,36 +10,45 @@ extern crate tokio_core;
 extern crate sanitize_filename;
 
 use std::env;
-use std::fmt::format;
-use std::fs::{copy, File};
-use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Result};
-use std::io::Write;
+//use std::fmt::format;
+use std::fs::{/*copy,*/ File};
+//use std::fs;
+use std::io::{self, BufRead/*, BufReader*/, Read, Result};
+//use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+//use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use env_logger::{Builder, Env};
+//use id3::Tag;
 use librespot_audio::{AudioDecrypt, AudioFile};
 use librespot_core::authentication::Credentials;
 use librespot_core::config::SessionConfig;
 use librespot_core::session::Session;
 use librespot_core::spotify_id::{SpotifyId, SpotifyIdError};
 use librespot_metadata::{Artist, FileFormat, Metadata, Track, Album};
-use log::Level::Error;
+//use log::Level::Error;
 use regex::Regex;
 use scoped_threadpool::Pool;
 use tokio_core::reactor::Core;
-use slugify::slugify;
-use id3::{ErrorKind, Frame, Tag, TagLike, Version};
+//use slugify::slugify;
+//use audiotags2::{Tag, TagType};
+//use id3::{ErrorKind, Frame, Tag, TagLike, Version};
+
+pub struct TrackInfo {
+    pub track: Track,
+    pub song_id: SpotifyId,
+    pub artists: Vec<String>,
+    pub album: String,
+}
 
 fn main() {
     Builder::from_env(Env::default().default_filter_or("info")).init();
 
     //Verify the number of arguments
     let args: Vec<_> = env::args().collect();
-    assert!(args.len() == 4, format!("Usage: {} user password tracks_file", args[0]));
+    assert!(args.len() == 4, "Usage: {} user password tracks_file", args[0]);
 
     //Create the sesion
     let mut core = Core::new().unwrap();
@@ -58,45 +67,46 @@ fn main() {
     let mut threadpool = Pool::new(1);
 
     // Create vector storing all tracks
-    let mut track_list: Vec<(Track, SpotifyId, Vec<String>)> = vec![];
+    let mut track_list: Vec<TrackInfo> = vec![];
 
     if let Ok(lines) = read_lines(args[3].to_owned()) {
         // Add all unique tracks to the list
         for link in lines {
             info!("--------------------------------------------------------------");
-            let linkCopy = link.unwrap().clone();
-            let songLink = linkCopy.as_str();
-            let songId = extractSongId(songLink).expect("Failed to extract song id");
-            info!("SongId: {}", songId.to_base62());
+            let song_id = extract_song_id(&link.unwrap()).expect("Failed to extract song id");
+            info!("SongId: {}", song_id.to_base62());
 
-            let track = getTrack(songId, &mut core, &session);
-            //println!("Track: {}", track.name);
-
-            let mut artists_strs = getArtists(&track, &mut core, &session);
-
-            //println!("Artist: {}", artists_strs[0]);
+            let track = get_track(song_id, &mut core, &session);
+            let artists_strs = get_artists(&track, &mut core, &session);
+            let album = get_album(&track, &mut core, &session);
 
             // Store the artist in the track list and dont and to track list if file is already downloaded
-            let fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", artists_strs.join(", "), track.name, songId.to_base62()));
+            let fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", artists_strs.join(", "), track.name, song_id.to_base62()));
 
             let path = format!("output/{}", fname);
 
             if Path::new(&path).exists() {
                 info!("{} - is already downloaded", fname);
+                //set_metadata(path, track, artists_strs);
                 continue;
             }
             info!("{} - Added to download list!", fname);
-            track_list.push((track, songId, artists_strs));
+            track_list.push(TrackInfo {
+                track: track,
+                song_id: song_id,
+                artists: artists_strs,
+                album: album,
+            });
         }
     }
 
     for item in track_list {
-        let file_id = item.0.files.get(&FileFormat::OGG_VORBIS_320)
-            .or(item.0.files.get(&FileFormat::OGG_VORBIS_160))
-            .or(item.0.files.get(&FileFormat::OGG_VORBIS_96))
+        let file_id = item.track.files.get(&FileFormat::OGG_VORBIS_320)
+            .or(item.track.files.get(&FileFormat::OGG_VORBIS_160))
+            .or(item.track.files.get(&FileFormat::OGG_VORBIS_96))
             .expect("Could not find a OGG_VORBIS format for the track.");
 
-        let key = core.run(session.audio_key().request(item.0.id, *file_id)).expect("Cannot get audio key");
+        let key = core.run(session.audio_key().request(item.track.id, *file_id)).expect("Cannot get audio key");
         let mut encrypted_file = core.run(AudioFile::open(&session, *file_id, 320, true)).unwrap();
         let mut buffer = Vec::new();
         let mut read_all: Result<usize> = Ok(0);
@@ -114,53 +124,52 @@ fn main() {
         let mut decrypted_buffer = Vec::new();
         AudioDecrypt::new(key, &buffer[..]).read_to_end(&mut decrypted_buffer).expect("Cannot decrypt stream");
 
-        let mut fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", item.2.join(", "), item.0.name, item.1.to_base62()));
+        let fname = windows_compatible_file_name(format!("{} - {} [{}].ogg", item.artists.join(", "), item.track.name, item.song_id.to_base62()));
         let dir = format!("output/{}", &fname);
-        let path = Path::new(&dir);
 
         info!("Filename: {}", &fname);
         std::fs::write(&dir, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
 
-        set_metadata(dir, item.0, item.2).expect("Error writing metadata");
+        //set_metadata(dir, item.0, item.2);
         //info!("6");
     }
 }
 
-pub fn extractSongId(link: &str) -> std::result::Result<SpotifyId, SpotifyIdError> {
+pub fn extract_song_id(link: &str) -> std::result::Result<SpotifyId, SpotifyIdError> {
     let spotify_uri: Regex = Regex::new(r"spotify:track:([[:alnum:]]+)").unwrap();
     let spotify_url: Regex = Regex::new(r"open\.spotify\.com/track/([[:alnum:]]+)").unwrap();
 
-    let uriCapture = spotify_uri.captures(link);
-    let urlCapture = spotify_url.captures(link);
+    let uri_capture = spotify_uri.captures(link);
+    let url_capture = spotify_url.captures(link);
 
-    if uriCapture.is_some() {
-        return SpotifyId::from_base62(&uriCapture.unwrap()[1]);
-    } else if urlCapture.is_some() {
-        return SpotifyId::from_base62(&urlCapture.unwrap()[1]);
+    if uri_capture.is_some() {
+        return SpotifyId::from_base62(&uri_capture.unwrap()[1]);
+    } else if url_capture.is_some() {
+        return SpotifyId::from_base62(&url_capture.unwrap()[1]);
     }
     Err(SpotifyIdError)
 }
 
-pub fn getTrack(songId: SpotifyId, core: &mut Core, session: &Session) -> Track {
-    info!("Getting track {}...", songId.to_base62());
-    let mut track = core.run(Track::get(session, songId)).expect("Cannot get track metadata");
+pub fn get_track(song_id: SpotifyId, core: &mut Core, session: &Session) -> Track {
+    info!("Getting track {}...", song_id.to_base62());
+    let mut track = core.run(Track::get(session, song_id)).expect("Cannot get track metadata");
     if !track.available {
         let mut pot_track = None;
-        warn!("Track {} is not available, finding alternative...", songId.to_base62());
+        warn!("Track {} is not available, finding alternative...", song_id.to_base62());
         for alt_track in track.alternatives.iter() {
             let potential_track = core.run(Track::get(session, *alt_track)).expect("Cannot get track metadata");
             if potential_track.available {
                 pot_track = Some(potential_track);
-                warn!("Found track alternative {} -> {}", songId.to_base62(), track.id.to_base62());
+                warn!("Found track alternative {} -> {}", song_id.to_base62(), track.id.to_base62());
                 break;
             }
         }
-        track = pot_track.expect(&format!("Could not find alternative for track {}", songId.to_base62()));
+        track = pot_track.expect(&format!("Could not find alternative for track {}", song_id.to_base62()));
     }
     track
 }
 
-pub fn getArtists(track: &Track, core: &mut Core, session: &Session) -> Vec<String> {
+pub fn get_artists(track: &Track, core: &mut Core, session: &Session) -> Vec<String> {
     let mut artist_vec: Vec<String> = vec![];
     let local_track = track.clone();
     for artist in local_track.artists {
@@ -168,6 +177,11 @@ pub fn getArtists(track: &Track, core: &mut Core, session: &Session) -> Vec<Stri
         artist_vec.push(artist_id);
     }
     artist_vec
+}
+
+pub fn get_album(track: &Track, core: &mut Core, session: &Session) -> String {
+    let album_id = core.run(Album::get(session, track.album)).expect("Cannot get album metadata").name;
+    album_id
 }
 
 fn windows_compatible_file_name(input: String) -> String {
@@ -179,21 +193,26 @@ fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
     let file = File::open(filename)?;
     Ok(io::BufReader::new(file).lines())
 }
-
-fn set_metadata(file: String, track: Track, artists: Vec<String>) -> id3::Result<()> {
+/*
+fn set_metadata(file: String, track: Track, artists: Vec<String>) {
     info!("Setting metadata for {}", &file);
-    let mut tag = match Tag::read_from_path(&file) {
-        Ok(tag) => tag,
-        Err(id3::Error{kind: ErrorKind::NoTag, ..}) => Tag::new(),
-        Err(err) => return Err(*Box::new(err)),
-    };
-    tag.set_artist("bob");
-    tag.set_title(track.name);
-    //tag.set_text("Spotify id", track.id.to_base62());
-    tag.write_to_path(&file, Version::Id3v24)?;
-    Ok(())
-}
 
+    let mut tag = Tag::new();
+    tag.set_title("foo title");
+    tag.write_to_path(&file).expect("Fail to save");
+
+    /*
+    let mut tag = Tag::new();
+    tag.set_artist("bob");
+    info!("Artist set to bob");
+    tag.set_title("track.name");
+    //tag.set_text("Spotify id", track.id.to_base62());
+    tag.write_to_path("song.ogg", Version::Id3v24)?;
+    info!("Metadata written to file");
+
+     */
+}
+*/
 /*
 ThingsNotToDo:
 -Add playlist support
