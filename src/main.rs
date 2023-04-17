@@ -219,4 +219,6 @@ ThingsNotToDo:
 -Dont download existing files - DONE
 -Add metadata to song files
 -Find a way to support duplicate file names without having the song id in the file name...
+-song download progress
+-check song hash to verify it downloaded correctly
  */
